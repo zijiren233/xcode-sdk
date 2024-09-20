@@ -1,0 +1,154 @@
+name: Release ioscross
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  package_sdks:
+    uses: ./.github/workflows/sdk.yml
+
+  release_sdks:
+    name: Release SDKs
+    runs-on: ubuntu-latest
+    needs: package_sdks
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download SDKs
+        id: download_sdks
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { execSync } = require('child_process');
+            execSync('npm install @actions/artifact');
+            const { DefaultArtifactClient } = require('@actions/artifact');
+            const artifact = new DefaultArtifactClient();
+            const fs = require('fs');
+
+            const allArtifacts = await artifact.listArtifacts();
+            const sdkArtifacts = allArtifacts.artifacts.filter(a => !a.name.startsWith('sdk-'));
+            for (const sdkArtifact of sdkArtifacts) {
+              console.log('download', sdkArtifact);
+              await artifact.downloadArtifact(sdkArtifact.id, {
+                path: '.'
+              });
+            }
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          prerelease: false
+          append_body: false
+          fail_on_unmatched_files: true
+          files: |
+            ./*.sdk.tar.xz
+
+  build_ioscross:
+    name: Build ioscross
+    runs-on: ubuntu-latest
+    needs:
+      - package_sdks
+      - release_sdks
+    strategy:
+      fail-fast: false
+      matrix:
+        sdk_versions: ${{ fromJSON(needs.package_sdks.outputs.SDK_VERSIONS) }}
+        ubuntu_version:
+          - 20.04
+          - 22.04
+          - 24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download SDK
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.sdk_versions }}
+          path: .
+
+      - name: Build ioscross
+        uses: uraimo/run-on-arch-action@v2
+        id: build
+        with:
+          arch: none
+          distro: none
+          base_image: amd64/ubuntu:${{ matrix.ubuntu_version }}
+          githubToken: ${{ github.token }}
+          dockerRunArgs: |
+            --volume "${PWD}:/cctools-port"
+          shell: /bin/bash
+          install: |
+            apt-get update && apt-get install -y \
+              curl \
+              wget \
+              clang \
+              make \
+              cmake \
+              git \
+              patch \
+              python3 \
+              libssl-dev \
+              lzma-dev \
+              libxml2-dev \
+              xz-utils \
+              bzip2 \
+              cpio \
+              zlib1g-dev \
+              llvm-dev \
+              uuid-dev \
+              gcc g++
+            if [ "${{ matrix.ubuntu_version }}" = "20.04" ]; then
+              apt install -y gcc-10 g++-10
+              update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-10 10 --slave /usr/bin/g++ g++ /usr/bin/g++-10
+            fi
+            wget https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/clang+llvm-18.1.8-x86_64-linux-gnu-ubuntu-18.04.tar.xz
+            mkdir -p /llvm
+            tar -xf clang+llvm-18.1.8-x86_64-linux-gnu-ubuntu-18.04.tar.xz -C /llvm --strip-components=1
+            rm -rf clang*.tar.xz
+            if [ "${{ matrix.ubuntu_version }}" = "24.04" ]; then
+              wget http://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.4-2_amd64.deb && dpkg -i libtinfo5_6.4-2_amd64.deb && rm libtinfo5_6.4-2_amd64.deb
+            else
+              apt install -y libtinfo5
+            fi
+            curl -sSL https://github.com/Kitware/CMake/releases/download/v3.30.3/cmake-3.30.3-linux-x86_64.tar.gz | tar -xzC /opt
+          run: |
+            export PATH=/llvm/bin:$PATH
+            export PATH=/opt/cmake-3.30.3-linux-x86_64/bin:$PATH
+            cd /cctools-port
+            mkdir -p dist
+            version=$(echo ${{ matrix.sdk_versions }} | sed 's/^iPhoneOS-//;s/^iPhoneSimulator-//')
+            export IPHONEOS_DEPLOYMENT_TARGET=5.0
+            SDK_FILE="$PWD/$(echo ${{ matrix.sdk_versions }} | sed 's/-/./g').sdk.tar.xz"
+            TARGETDIR=/usr/local/ioscross
+            sed -i "s|TARGETDIR=\"\$PWD/target\"|TARGETDIR=$TARGETDIR|g" usage_examples/ios_toolchain/build.sh
+            if [[ "${{ matrix.sdk_versions }}" == iPhoneSimulator* ]]; then
+              sed -i 's|iPhoneOS|iPhoneSimulator|g' usage_examples/ios_toolchain/build.sh
+              bash usage_examples/ios_toolchain/build.sh "$SDK_FILE" arm64
+              tar -zcf dist/ioscross-${version}-arm64-linux-amd64-gnu-ubuntu-${{ matrix.ubuntu_version }}.tar.xz -C $TARGETDIR .
+              rm -rf $TARGETDIR
+
+              sed -i 's|^TRIPLE=.*|TRIPLE="x86_64-apple-darwin11"|' usage_examples/ios_toolchain/build.sh
+              bash usage_examples/ios_toolchain/build.sh "$SDK_FILE" x86_64
+              tar -zcf dist/ioscross-${version}-x86_64-linux-amd64-gnu-ubuntu-${{ matrix.ubuntu_version }}.tar.xz -C $TARGETDIR .
+              rm -rf $TARGETDIR
+            elif [[ "${{ matrix.sdk_versions }}" == iPhoneOS* ]]; then
+              bash usage_examples/ios_toolchain/build.sh "$SDK_FILE" arm64
+              tar -zcf dist/ioscross-${version}-arm64-linux-amd64-gnu-ubuntu-${{ matrix.ubuntu_version }}.tar.xz -C $TARGETDIR .
+              rm -rf $TARGETDIR
+            else
+              echo "Unknown SDK version: ${{ matrix.sdk_versions }}"
+              exit 1
+            fi
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          prerelease: false
+          append_body: false
+          fail_on_unmatched_files: true
+          files: |
+            dist/*
