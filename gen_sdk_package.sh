@@ -193,7 +193,7 @@ else
 
 fi
 
-SDKS=$(ls | grep -E "^$PLATFORM15.*|^$PLATFORM14.*|^$PLATFORM13.*|^$PLATFORM12.*|^$PLATFORM11.*|^$PLATFORM10.*" | grep -v "Patch")
+SDKS=$(ls | grep -v "Patch")
 
 if [ -z "$SDKS" ]; then
   echo "No SDK found" 1>&2
