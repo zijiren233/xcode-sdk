@@ -212,7 +212,7 @@ LIBCXXDIR3="usr/include/c++/v1"
 # Manual directory
 MANDIR="Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/share/man"
 
-for SDK in $SDKS; do
+for SDK in "${SDKS[@]}"; do
   echo -n "packaging $(echo "$SDK" | sed -E "s/(.sdk|.pkg)//g") SDK "
   echo "(this may take several minutes) ..."
 

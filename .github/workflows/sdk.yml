@@ -14,9 +14,9 @@ jobs:
       fail-fast: false
       matrix:
         macos_versions:
-          - 13
           - 14
           - 15
+          - 26
     runs-on: macos-${{ matrix.macos_versions }}
     steps:
       - uses: actions/checkout@v4
