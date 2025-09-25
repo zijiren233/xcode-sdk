@@ -50,6 +50,9 @@ esac
 
 function compress()
 {
+  echo $SDK_COMPRESSOR
+  echo $1
+  echo $2
   case $SDK_COMPRESSOR in
     "zip")
       $SDK_COMPRESSOR -q -5 -r - $1 > $2 ;;
